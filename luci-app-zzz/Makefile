@@ -1,7 +1,7 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=luci-app-zzz
-PKG_RELEASE:=1
+PKG_RELEASE:=2
 PKG_VERSION:=1.0.0
 PKG_MAINTAINER:=Your Name <your.email@example.com>
 PKG_LICENSE:=Apache-2.0
@@ -16,7 +16,7 @@ define Package/luci-app-zzz
   SUBMENU:=3. Applications
   TITLE:=LuCI Support for zzz (802.1X Client)
   PKGARCH:=all
-  DEPENDS:=+luci-base +zzz-client
+  DEPENDS:=+luci-base +luci-compat +zzz-client
 endef
 
 define Package/luci-app-zzz/description

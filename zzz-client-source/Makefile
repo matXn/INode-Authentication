@@ -2,12 +2,7 @@ include $(TOPDIR)/rules.mk
 
 PKG_NAME:=zzz-client
 PKG_VERSION:=0.1.1
-PKG_RELEASE:=1
-
-PKG_SOURCE_PROTO:=git
-PKG_SOURCE_URL:=https://github.com/diredocks/zzz.git
-PKG_SOURCE_VERSION:=HEAD
-PKG_MIRROR_HASH:=skip
+PKG_RELEASE:=2
 
 PKG_MAINTAINER:=Your Name <your.email@example.com>
 PKG_LICENSE:=MIT
@@ -26,6 +21,12 @@ define Package/zzz-client/description
   zzz is a lightweight 802.1X (EAPOL) client written in C.
   It handles EAP authentication for campus/corporate networks
   that require 802.1X port-based access control.
+endef
+
+# Compile the checked-out source, including the local configuration fixes.
+define Build/Prepare
+	$(INSTALL_DIR) $(PKG_BUILD_DIR)
+	$(CP) ./src ./include $(PKG_BUILD_DIR)/
 endef
 
 # All source files from meson.build (14 files total)

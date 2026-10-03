@@ -5,19 +5,35 @@ on:
     branches: [ main ]
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
   build:
+    name: RM2100 / OpenWrt 23.05.2
     runs-on: ubuntu-latest
+    timeout-minutes: 45
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup OpenWrt SDK
+      - name: Install build and test dependencies
         run: |
-          wget https://downloads.openwrt.org/releases/23.05.2/targets/ramips/mt7620/openwrt-sdk-23.05.2-ramips-mt7620_gcc-12.3.0_musl.Linux-x86_64.tar.xz
-          tar -xf openwrt-sdk-23.05.2-ramips-mt7620_gcc-12.3.0_musl.Linux-x86_64.tar.xz
-          mv openwrt-sdk-23.05.2-ramips-mt7620_gcc-12.3.0_musl.Linux-x86_64 openwrt-sdk
+          sudo apt-get update
+          sudo apt-get install -y build-essential libncurses-dev libssl-dev \
+            python3 python3-dev rsync unzip zstd liblua5.4-0
+
+      - name: Run regression checks
+        run: python3 tests/run_regression.py
+
+      - name: Setup RM2100 OpenWrt SDK
+        run: |
+          sdk=openwrt-sdk-23.05.2-ramips-mt7621_gcc-12.3.0_musl.Linux-x86_64
+          wget --tries=3 --timeout=60 "https://downloads.openwrt.org/releases/23.05.2/targets/ramips/mt7621/$sdk.tar.xz"
+          echo "655ed2e84aec95190f1b7853a647607048d991eac3e319eed60bc3d585b094fd  $sdk.tar.xz" | sha256sum -c -
+          tar -xf "$sdk.tar.xz"
+          mv "$sdk" openwrt-sdk
 
       - name: Install feeds
         working-directory: openwrt-sdk
@@ -25,25 +41,32 @@ jobs:
           ./scripts/feeds update -a
           ./scripts/feeds install -a
 
-      - name: Copy packages into SDK
+      - name: Copy local packages into SDK
         run: |
           cp -r luci-app-zzz openwrt-sdk/package/luci-app-zzz
           cp -r zzz-client-source openwrt-sdk/package/zzz-client
 
-
-      - name: Check zzz-client structure
-        run: |
-          find openwrt-sdk/package/zzz-client/ -type f
-
-      - name: Build
+      - name: Build RM2100 packages
         working-directory: openwrt-sdk
         run: |
+          ./scripts/config -e PACKAGE_zzz-client -e PACKAGE_luci-app-zzz
           make defconfig
-          make package/luci-app-zzz/compile -j$(nproc) V=s
-          make package/zzz-client/compile -j$(nproc) V=s
+          make package/zzz-client/compile -j2 V=s
+          make package/luci-app-zzz/compile -j2 V=s
 
-      - name: Upload artifacts
+      - name: Collect packages and checksums
+        run: |
+          mkdir -p artifacts
+          find openwrt-sdk/bin/packages -type f -name '*.ipk' -exec cp {} artifacts/ \;
+          test -n "$(find artifacts -name 'zzz-client_*_mipsel_24kc.ipk' -print -quit)"
+          test -n "$(find artifacts -name 'luci-app-zzz_*_all.ipk' -print -quit)"
+          printf 'Device: Redmi AC2100 (RM2100)\nOpenWrt: 23.05.2\nTarget: ramips/mt7621\nArchitecture: mipsel_24kc\nCommit: %s\n' "$GITHUB_SHA" > artifacts/BUILD-INFO.txt
+          cd artifacts
+          sha256sum *.ipk > SHA256SUMS
+
+      - name: Upload RM2100 artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: zzz-ramips-mt7620
-          path: openwrt-sdk/bin/packages/**/*.ipk
+          name: zzz-rm2100-openwrt-23.05.2-mipsel_24kc
+          path: artifacts/
+          if-no-files-found: error

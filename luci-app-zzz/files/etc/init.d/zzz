@@ -17,9 +17,21 @@ CONFIG_FILE=/etc/config.ini
 CHECK_SCRIPT=/etc/zzz/check_network.sh
 WATCHDOG_SCRIPT=/etc/zzz/watchdog.sh
 LOG_TAG="zzz-init"
+IPV6_STATE=/var/run/zzz-ipv6.state
+
+extra_command "reconnect" "Restart the authentication client without restarting the watchdog"
 
 log_msg() {
 	logger -t "$LOG_TAG" "$1"
+}
+
+config_value() {
+	awk -v section="$1" -v key="$2" '
+		{sub(/\r$/, "")}
+		/^\[/{inside=($0 == "[" section "]"); next}
+		inside && $0 ~ "^" key "[[:space:]]*=" {
+			sub(/^[^=]*=[[:space:]]*/, ""); print; exit
+		}' "$CONFIG_FILE" 2>/dev/null
 }
 
 read_config() {
@@ -28,12 +40,12 @@ read_config() {
 		return 1
 	fi
 
-	DEVICE=$(grep -E "^device[[:space:]]*=" "$CONFIG_FILE" 2>/dev/null | head -1 | sed "s/^device[[:space:]]*=[[:space:]]*//" | tr -d '\r')
-	USERNAME=$(grep -E "^username[[:space:]]*=" "$CONFIG_FILE" 2>/dev/null | head -1 | sed "s/^username[[:space:]]*=[[:space:]]*//" | tr -d '\r')
-	INTERFACE=$(grep -E "^interface[[:space:]]*=" "$CONFIG_FILE" 2>/dev/null | head -1 | sed "s/^interface[[:space:]]*=[[:space:]]*//" | tr -d '\r')
+	DEVICE=$(config_value auth device)
+	USERNAME=$(config_value auth username)
+	INTERFACE=$(config_value auth interface)
 
-	FIX_TTL=$(grep -E "^fix_ttl[[:space:]]*=" "$CONFIG_FILE" 2>/dev/null | head -1 | sed "s/^fix_ttl[[:space:]]*=[[:space:]]*//" | tr -d '\r')
-	DISABLE_IPV6=$(grep -E "^disable_ipv6[[:space:]]*=" "$CONFIG_FILE" 2>/dev/null | head -1 | sed "s/^disable_ipv6[[:space:]]*=[[:space:]]*//" | tr -d '\r')
+	FIX_TTL=$(config_value anti_detection fix_ttl)
+	DISABLE_IPV6=$(config_value anti_detection disable_ipv6)
 
 	if [ -z "$DEVICE" ]; then
 		log_msg "ERROR: No 'device' specified in $CONFIG_FILE"
@@ -43,39 +55,125 @@ read_config() {
 	return 0
 }
 
-apply_anti_detection() {
-	if [ "$FIX_TTL" = "1" ]; then
-		log_msg "Enabling TTL anti-detection (set TTL to 64)"
-		# Clear existing rules to avoid duplicates
-		iptables -t mangle -D POSTROUTING -j TTL --ttl-set 64 2>/dev/null
-		iptables -t mangle -D PREROUTING -j TTL --ttl-set 64 2>/dev/null
-		# Apply TTL=64 for outgoing traffic
-		iptables -t mangle -I POSTROUTING -j TTL --ttl-set 64 2>/dev/null
-		iptables -t mangle -I PREROUTING -j TTL --ttl-set 64 2>/dev/null
+# Only remove rules owned by this service, regardless of the newly saved config.
+remove_anti_detection() {
+	local failed=0
+	if command -v nft >/dev/null 2>&1 &&
+	   nft list table ip zzz_ttl >/dev/null 2>&1; then
+		nft delete table ip zzz_ttl >/dev/null 2>&1 || failed=1
 	fi
-	
-	if [ "$DISABLE_IPV6" = "1" ]; then
-		log_msg "Disabling IPv6 to prevent sharing detection leak"
-		sysctl -w net.ipv6.conf.all.disable_ipv6=1 >/dev/null 2>&1
-		sysctl -w net.ipv6.conf.default.disable_ipv6=1 >/dev/null 2>&1
+	if command -v iptables >/dev/null 2>&1; then
+		for hook in PREROUTING POSTROUTING; do
+			while iptables -t mangle -C "$hook" -j ZZZ_TTL >/dev/null 2>&1; do
+				iptables -t mangle -D "$hook" -j ZZZ_TTL >/dev/null 2>&1 || {
+					failed=1
+					break
+				}
+			done
+		done
+		if iptables -t mangle -L ZZZ_TTL >/dev/null 2>&1; then
+			iptables -t mangle -F ZZZ_TTL >/dev/null 2>&1 || failed=1
+			iptables -t mangle -X ZZZ_TTL >/dev/null 2>&1 || failed=1
+		fi
 	fi
+
+	# Restore all/default first, then each existing interface's original value.
+	if [ -f "$IPV6_STATE" ]; then
+		while read -r key value; do
+			case "$value" in 0|1) ;; *) failed=1; continue;; esac
+			if [ -f "/proc/sys/net/ipv6/conf/$key/disable_ipv6" ]; then
+				sysctl -w "net/ipv6/conf/$key/disable_ipv6=$value" >/dev/null 2>&1 ||
+					failed=1
+			fi
+		done < "$IPV6_STATE"
+		[ "$failed" = "0" ] && rm -f "$IPV6_STATE"
+	fi
+	if [ "$failed" != "0" ]; then
+		log_msg "ERROR: Could not fully restore network settings; saved state retained"
+		return 1
+	fi
+	return 0
 }
 
-remove_anti_detection() {
+apply_anti_detection() {
+	remove_anti_detection || return 1
 	if [ "$FIX_TTL" = "1" ]; then
-		log_msg "Removing TTL anti-detection rules"
-		iptables -t mangle -D POSTROUTING -j TTL --ttl-set 64 2>/dev/null
-		iptables -t mangle -D PREROUTING -j TTL --ttl-set 64 2>/dev/null
+		if command -v nft >/dev/null 2>&1; then
+			if ! nft -f - <<'RULES'
+table ip zzz_ttl {
+	chain prerouting {
+		type filter hook prerouting priority mangle; policy accept;
+		ip ttl set 64
+	}
+	chain postrouting {
+		type filter hook postrouting priority mangle; policy accept;
+		ip ttl set 64
+	}
+}
+RULES
+			then
+				log_msg "ERROR: Could not apply TTL rules using nftables"
+			else
+				log_msg "TTL=64 applied using nftables"
+			fi
+		elif command -v iptables >/dev/null 2>&1; then
+			if iptables -t mangle -N ZZZ_TTL &&
+			   iptables -t mangle -A ZZZ_TTL -j TTL --ttl-set 64 &&
+			   iptables -t mangle -I PREROUTING -j ZZZ_TTL &&
+			   iptables -t mangle -I POSTROUTING -j ZZZ_TTL; then
+				log_msg "TTL=64 applied using iptables"
+			else
+				log_msg "ERROR: TTL rules failed; check iptables-mod-ipopt"
+				remove_anti_detection
+			fi
+		else
+			log_msg "ERROR: TTL requested but neither nft nor iptables is available"
+		fi
 	fi
-	
+
 	if [ "$DISABLE_IPV6" = "1" ]; then
-		log_msg "Re-enabling IPv6"
-		sysctl -w net.ipv6.conf.all.disable_ipv6=0 >/dev/null 2>&1
-		sysctl -w net.ipv6.conf.default.disable_ipv6=0 >/dev/null 2>&1
+		(
+			umask 077
+			# Snapshot before changing anything, including per-interface overrides.
+			for key in all default; do
+				file="/proc/sys/net/ipv6/conf/$key/disable_ipv6"
+				[ -f "$file" ] && printf '%s %s\n' "$key" "$(cat "$file")"
+			done
+			for file in /proc/sys/net/ipv6/conf/*/disable_ipv6; do
+				[ -f "$file" ] || continue
+				key="${file%/disable_ipv6}"
+				key="${key##*/}"
+				case "$key" in all|default) continue;; esac
+				printf '%s %s\n' "$key" "$(cat "$file")"
+			done
+		) > "$IPV6_STATE" || {
+			log_msg "ERROR: Could not save previous IPv6 settings"
+			return 1
+		}
+		chmod 600 "$IPV6_STATE" || return 1
+		if [ -s "$IPV6_STATE" ] &&
+		   sysctl -w net.ipv6.conf.all.disable_ipv6=1 >/dev/null 2>&1 &&
+		   sysctl -w net.ipv6.conf.default.disable_ipv6=1 >/dev/null 2>&1; then
+			log_msg "IPv6 disabled; previous settings saved for restoration"
+		else
+			log_msg "ERROR: Could not disable IPv6"
+			remove_anti_detection
+		fi
 	fi
 }
 
 validate_config() {
+	if [ -z "$USERNAME" ] ||
+	   [ -z "$(config_value auth password)" ]; then
+		log_msg "ERROR: Authentication username and password must not be empty"
+		return 1
+	fi
+	case "$DEVICE" in
+		''|*[!a-zA-Z0-9_.:-]*)
+			log_msg "ERROR: Invalid authentication interface name"
+			return 1;;
+	esac
+
 	if [ ! -x "$PROG" ]; then
 		log_msg "ERROR: zzz binary not found or not executable at $PROG"
 		return 1
@@ -94,15 +192,21 @@ validate_config() {
 }
 
 start_service() {
+	rm -f /var/run/zzz-connectivity
 	read_config || return 1
 	validate_config || return 1
+	chmod 600 "$CONFIG_FILE" &&
+		{ [ ! -f /etc/config/zzz ] || chmod 600 /etc/config/zzz; } || {
+		log_msg "ERROR: Could not restrict credential file permissions"
+		return 1
+	}
 
-	log_msg "Starting zzz on device $DEVICE (user: ${USERNAME:-unknown}) with executable $PROG"
+	log_msg "Starting zzz on device $DEVICE with executable $PROG"
 
 	procd_open_instance "$NAME"
 	# zzz 程序的第一个参数必须是配置文件的路径
 	procd_set_param command "$PROG" "$CONFIG_FILE"
-	procd_set_param respawn 3600 5 5
+	procd_set_param respawn 3600 5 0
 	procd_set_param pidfile /var/run/$NAME.pid
 	procd_set_param stdout 1
 	procd_set_param stderr 1
@@ -119,7 +223,7 @@ start_service() {
 	local wd_enabled
 	# Extract 'enabled' only from the [watchdog] section to avoid matching
 	# keys with the same name in other sections.
-	wd_enabled=$(awk '/^\[watchdog\]/{in_s=1; next} /^\[/{in_s=0} in_s && /^enabled[[:space:]]*=/{sub(/^enabled[[:space:]]*=[[:space:]]*/,""); gsub(/\r/,""); print; exit}' "$CONFIG_FILE" 2>/dev/null)
+	wd_enabled=$(config_value watchdog enabled)
 	if [ "$wd_enabled" = "1" ] && [ -x "$WATCHDOG_SCRIPT" ] && [ -x "$CHECK_SCRIPT" ]; then
 		procd_open_instance "${NAME}_watchdog"
 		procd_set_param command "$WATCHDOG_SCRIPT" "$CONFIG_FILE" "$CHECK_SCRIPT"
@@ -141,8 +245,18 @@ stop_service() {
 	killall "$NAME" 2>/dev/null
 	
 	# Cleanup Anti-Detection mechanisms
-	read_config
 	remove_anti_detection
+	rm -f /var/run/zzz-connectivity
+}
+
+reconnect() {
+	if [ -x /sbin/procd ]; then
+		log_msg "Requesting reconnect of the authentication instance"
+		procd_send_signal "$NAME" "$NAME" TERM
+	else
+		log_msg "ERROR: Client-only reconnect requires procd"
+		return 1
+	fi
 }
 
 service_triggers() {
@@ -204,7 +318,6 @@ if [ ! -x /sbin/procd ]; then
 			[ -n "$pid" ] && kill -9 "$pid" 2>/dev/null
 			rm -f /var/run/$NAME.pid 2>/dev/null
 			
-			read_config
 			remove_anti_detection
 			
 			log_msg "zzz stopped"

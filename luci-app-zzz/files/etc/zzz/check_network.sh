@@ -5,8 +5,7 @@
 #  This script performs a single connectivity check cycle.
 # ============================================================
 
-CONFIG_FILE="/etc/config.ini"
-ZZZ_BIN="/usr/bin/zzz"
+CONFIG_FILE="${1:-/etc/config.ini}"
 LOG_TAG="zzz-checker"
 
 log_msg() {
@@ -16,18 +15,24 @@ log_msg() {
 # Read configuration
 get_config_value() {
 	local key="$1"
-	grep -E "^${key}[[:space:]]*=" "$CONFIG_FILE" 2>/dev/null | head -1 | sed "s/^${key}[[:space:]]*=[[:space:]]*//" | tr -d '\r'
+	local section="$2"
+	awk -v key="$key" -v section="$section" '
+		{sub(/\r$/, "")}
+		/^\[/{inside=($0 == "[" section "]"); next}
+		inside && $0 ~ "^" key "[[:space:]]*=" {
+			sub(/^[^=]*=[[:space:]]*/, ""); gsub(/\r/, ""); print; exit
+		}' "$CONFIG_FILE" 2>/dev/null
 }
 
 # Get gateway IP
 get_gateway() {
-	local gw_cfg="$(get_config_value 'gateway_ip' 2>/dev/null)"
+	local gw_cfg="$(get_config_value 'gateway_ip' 'watchdog')"
 	if [ -n "$gw_cfg" ]; then
 		echo "$gw_cfg"
 		return
 	fi
 	local gw
-	gw="$(ip route show default 2>/dev/null | awk 'NR==1{print $3}')"
+	gw="$(ip -4 route show default dev "$device" 2>/dev/null | awk 'NR==1{print $3}')"
 	if [ -n "$gw" ]; then
 		echo "$gw"
 	else
@@ -43,7 +48,7 @@ main() {
 		exit 1
 	fi
 
-	local device="$(get_config_value 'device')"
+	local device="$(get_config_value 'device' 'auth')"
 
 	if [ -z "$device" ]; then
 		log_msg "ERROR: No device specified in config"
@@ -57,16 +62,15 @@ main() {
 	fi
 
 	local gw_ip="$(get_gateway)"
-	local result=0
+	local gateway_ok=1
 
 	# Test 1: Ping gateway with specific interface
 	if [ -n "$gw_ip" ]; then
 		if ping -c 1 -W 3 -I "$device" "$gw_ip" >/dev/null 2>&1; then
-			log_msg "OK: Gateway $gw_ip reachable via $device"
-			exit 0
+			gateway_ok=0
+			log_msg "Gateway $gw_ip reachable via $device; checking external connectivity"
 		else
 			log_msg "FAIL: Gateway $gw_ip unreachable via $device"
-			result=1
 		fi
 	fi
 
@@ -80,7 +84,13 @@ main() {
 		fi
 	fi
 
-	# Test 3: Try public DNS fallback
+	# An explicit probe target is authoritative (e.g. networks blocking public ICMP).
+	local probe_ip="$(get_config_value 'gateway_ip' 'watchdog')"
+	if [ -n "$probe_ip" ]; then
+		exit "$gateway_ok"
+	fi
+
+	# A reachable gateway alone does not establish external connectivity.
 	if ping -c 1 -W 3 -I "$device" 223.5.5.5 >/dev/null 2>&1; then
 		log_msg "OK: DNS (223.5.5.5) reachable via $device"
 		exit 0
