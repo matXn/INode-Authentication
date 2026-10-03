@@ -5,7 +5,9 @@ module("luci.controller.zzz", package.seeall)
 
 function index()
 	-- Only register the configuration page
-	entry({"admin", "services", "zzz"}, cbi("zzz/config"), _("802.1X 客户端"), 60).dependent = true
+	local page = entry({"admin", "services", "zzz"}, cbi("zzz/config"), _("802.1X 客户端"), 60)
+	page.dependent = true
+	page.acl_depends = { "luci-app-zzz" }
 end
 
 -- Get current service status as JSON

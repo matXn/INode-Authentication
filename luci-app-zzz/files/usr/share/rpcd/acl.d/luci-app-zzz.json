@@ -1,0 +1,11 @@
+{
+  "luci-app-zzz": {
+    "description": "Configure the zzz 802.1X client",
+    "read": {
+      "uci": [ "zzz", "network" ]
+    },
+    "write": {
+      "uci": [ "zzz" ]
+    }
+  }
+}

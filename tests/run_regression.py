@@ -5,6 +5,7 @@ Uses GCC and an existing Lua 5.4 shared library. All system operations are mocke
 import ctypes
 import ctypes.util
 import os
+import json
 from pathlib import Path
 import subprocess
 import tempfile
@@ -12,13 +13,19 @@ import tempfile
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def run_lua():
-    lua = ctypes.CDLL(ctypes.util.find_library("lua5.4"))
+def run_lua(version):
+    library = ctypes.util.find_library("lua" + version)
+    if not library:
+        raise RuntimeError("Install the Lua " + version + " shared library")
+    lua = ctypes.CDLL(library)
     lua.luaL_newstate.restype = ctypes.c_void_p
     lua.luaL_openlibs.argtypes = [ctypes.c_void_p]
     lua.luaL_loadstring.argtypes = [ctypes.c_void_p, ctypes.c_char_p]
-    lua.lua_pcallk.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_int,
-                             ctypes.c_int, ctypes.c_longlong, ctypes.c_void_p]
+    if version == "5.1":
+        lua.lua_pcall.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_int, ctypes.c_int]
+    else:
+        lua.lua_pcallk.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_int,
+                                 ctypes.c_int, ctypes.c_longlong, ctypes.c_void_p]
     lua.lua_tolstring.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_void_p]
     lua.lua_tolstring.restype = ctypes.c_char_p
     lua.lua_close.argtypes = [ctypes.c_void_p]
@@ -29,11 +36,24 @@ def run_lua():
     try:
         result = lua.luaL_loadstring(state, code)
         if not result:
-            result = lua.lua_pcallk(state, 0, 0, 0, 0, None)
+            result = (lua.lua_pcall(state, 0, 0, 0) if version == "5.1" else
+                      lua.lua_pcallk(state, 0, 0, 0, 0, None))
         if result:
             raise AssertionError(lua.lua_tolstring(state, -1, None).decode())
     finally:
         lua.lua_close(state)
+    print("PASS: LuCI model/controller mocks on Lua " + version)
+
+
+def run_package_checks():
+    package = ROOT / "luci-app-zzz"
+    acl = json.loads((package / "files/usr/share/rpcd/acl.d/luci-app-zzz.json").read_text())
+    assert acl["luci-app-zzz"]["read"]["uci"] == ["zzz", "network"]
+    assert acl["luci-app-zzz"]["write"]["uci"] == ["zzz"]
+    makefile = (package / "Makefile").read_text()
+    assert "+luci-compat" in makefile and "+zzz-client" in makefile
+    assert "$(INSTALL_DATA) files/usr/share/rpcd/acl.d/luci-app-zzz.json" in makefile
+    print("PASS: LuCI compatibility dependency and UCI ACL packaging")
 
 
 def run_config(tmp):
@@ -169,7 +189,9 @@ reconnect || exit 6
 
 
 if __name__ == "__main__":
-    run_lua()
+    run_lua("5.1")
+    run_lua("5.4")
+    run_package_checks()
     with tempfile.TemporaryDirectory(prefix="inode-regression-") as directory:
         tmp = Path(directory)
         run_config(tmp)

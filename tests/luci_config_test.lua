@@ -102,3 +102,27 @@ options._stop:write("main")
 map:on_after_commit()
 assert(restart_count == 1, "Saving after Stop must not restart the service")
 print("PASS: Lua interface selection, validation, credential escaping, atomic save failures")
+
+-- Validate legacy controller registration on both supported test runtimes.
+local page = {}
+local env = setmetatable({
+    module = function() end,
+    _ = function(value) return value end,
+    cbi = function(path) assert(path == "zzz/config"); return path end,
+    entry = function(path, target)
+        assert(table.concat(path, "/") == "admin/services/zzz")
+        assert(target == "zzz/config")
+        return page
+    end
+}, { __index = _G })
+local path = PROJECT_ROOT .. "/luci-app-zzz/files/luci/controllers/zzz.lua"
+local controller
+if setfenv then
+    controller = assert(loadfile(path))
+    setfenv(controller, env)
+else
+    controller = assert(loadfile(path, "t", env))
+end
+controller()
+env.index()
+assert(page.dependent and page.acl_depends[1] == "luci-app-zzz")

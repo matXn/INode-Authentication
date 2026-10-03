@@ -10,7 +10,7 @@ permissions:
 
 jobs:
   build:
-    name: RM2100 / OpenWrt 23.05.2
+    name: RM2100 / OpenWrt 25.12.5
     runs-on: ubuntu-latest
     timeout-minutes: 45
 
@@ -22,17 +22,17 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y build-essential libncurses-dev libssl-dev \
-            python3 python3-dev rsync unzip zstd liblua5.4-0
+            python3 python3-dev rsync unzip zstd liblua5.4-0 liblua5.1-0
 
       - name: Run regression checks
         run: python3 tests/run_regression.py
 
       - name: Setup RM2100 OpenWrt SDK
         run: |
-          sdk=openwrt-sdk-23.05.2-ramips-mt7621_gcc-12.3.0_musl.Linux-x86_64
-          wget -nv --tries=3 --timeout=60 "https://downloads.openwrt.org/releases/23.05.2/targets/ramips/mt7621/$sdk.tar.xz"
-          echo "655ed2e84aec95190f1b7853a647607048d991eac3e319eed60bc3d585b094fd  $sdk.tar.xz" | sha256sum -c -
-          tar -xf "$sdk.tar.xz"
+          sdk=openwrt-sdk-25.12.5-ramips-mt7621_gcc-14.3.0_musl.Linux-x86_64
+          wget -nv --tries=3 --timeout=60 "https://downloads.openwrt.org/releases/25.12.5/targets/ramips/mt7621/$sdk.tar.zst"
+          echo "9962084f4131610e90e48bc864c6ceade0b238f15f335de5f672910532b20e9c  $sdk.tar.zst" | sha256sum -c -
+          tar -xf "$sdk.tar.zst"
           mv "$sdk" openwrt-sdk
 
       - name: Install feeds
@@ -57,16 +57,16 @@ jobs:
       - name: Collect packages and checksums
         run: |
           mkdir -p artifacts
-          find openwrt-sdk/bin/packages -type f -name '*.ipk' -exec cp {} artifacts/ \;
-          test -n "$(find artifacts -name 'zzz-client_*_mipsel_24kc.ipk' -print -quit)"
-          test -n "$(find artifacts -name 'luci-app-zzz_*_all.ipk' -print -quit)"
-          printf 'Device: Redmi AC2100 (RM2100)\nOpenWrt: 23.05.2\nTarget: ramips/mt7621\nArchitecture: mipsel_24kc\nCommit: %s\n' "$GITHUB_SHA" > artifacts/BUILD-INFO.txt
+          find openwrt-sdk/bin/packages -type f -name '*.apk' -exec cp {} artifacts/ \;
+          test -n "$(find artifacts -name 'zzz-client-*.apk' -print -quit)"
+          test -n "$(find artifacts -name 'luci-app-zzz-*.apk' -print -quit)"
+          printf 'Device: Redmi AC2100 (RM2100)\nOpenWrt: 25.12.5\nTarget: ramips/mt7621\nArchitecture: mipsel_24kc\nCommit: %s\n' "$GITHUB_SHA" > artifacts/BUILD-INFO.txt
           cd artifacts
-          sha256sum *.ipk > SHA256SUMS
+          sha256sum *.apk > SHA256SUMS
 
       - name: Upload RM2100 artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: zzz-rm2100-openwrt-23.05.2-mipsel_24kc
+          name: zzz-rm2100-openwrt-25.12.5-mipsel_24kc
           path: artifacts/
           if-no-files-found: error
