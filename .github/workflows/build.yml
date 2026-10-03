@@ -30,7 +30,7 @@ jobs:
       - name: Setup RM2100 OpenWrt SDK
         run: |
           sdk=openwrt-sdk-23.05.2-ramips-mt7621_gcc-12.3.0_musl.Linux-x86_64
-          wget --tries=3 --timeout=60 "https://downloads.openwrt.org/releases/23.05.2/targets/ramips/mt7621/$sdk.tar.xz"
+          wget -nv --tries=3 --timeout=60 "https://downloads.openwrt.org/releases/23.05.2/targets/ramips/mt7621/$sdk.tar.xz"
           echo "655ed2e84aec95190f1b7853a647607048d991eac3e319eed60bc3d585b094fd  $sdk.tar.xz" | sha256sum -c -
           tar -xf "$sdk.tar.xz"
           mv "$sdk" openwrt-sdk
@@ -49,7 +49,7 @@ jobs:
       - name: Build RM2100 packages
         working-directory: openwrt-sdk
         run: |
-          ./scripts/config -e PACKAGE_zzz-client -e PACKAGE_luci-app-zzz
+          printf '%s\n' 'CONFIG_PACKAGE_zzz-client=y' 'CONFIG_PACKAGE_luci-app-zzz=y' >> .config
           make defconfig
           make package/zzz-client/compile -j2 V=s
           make package/luci-app-zzz/compile -j2 V=s
