@@ -1,6 +1,6 @@
 """Run in Linux/WSL: python3 tests/run_regression.py.
 
-Uses GCC and an existing Lua 5.4 shared library. All system operations are mocked.
+Uses GCC and Lua 5.1/5.4 shared libraries. All system operations are mocked.
 """
 import ctypes
 import ctypes.util

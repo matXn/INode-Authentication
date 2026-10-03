@@ -52,13 +52,14 @@ OpenWrt 的 `wan` 配置对应的网口会标记为 `WAN` 并优先显示；请�
 
 ### 回归检查
 
-在 Linux/WSL 环境中运行（需要 GCC 和 Lua 5.4 共享库）：
+在 Linux/WSL 环境中运行（需要 GCC，以及 Lua 5.1 和 5.4 共享库）：
 
 ```sh
 python3 tests/run_regression.py
 ```
 
-检查配置特殊字符往返、保存失败保护、重连次数上限、连通性判断及 IPv6 状态恢复。
+检查 Lua 5.1/5.4 下的页面模型和控制器注册、ACL 打包、配置特殊字符往返、
+保存失败保护、重连次数上限、连通性判断及 IPv6 状态恢复。
 系统和网络操作均通过模拟验证；仍需在目标 OpenWrt 路由器上确认实际运行。
 
 ---
@@ -73,8 +74,9 @@ python3 tests/run_regression.py
 
 ### 2. 确认 SDK 版本
 
-默认工作流编译红米 AC2100（RM2100）的软件安装包，使用 OpenWrt 23.05.2、
-`ramips/mt7621` 目标和 `mipsel_24kc` 包架构。产物为 `.ipk`，不是路由器刷机固件。
+默认工作流编译红米 AC2100（RM2100）的软件安装包，使用 OpenWrt 25.12.5、
+`ramips/mt7621` 目标和 `mipsel_24kc` 包架构。产物为 `.apk`，不是 Android 应用或路由器刷机固件。
+OpenWrt 25.12 使用 apk 包管理器，不要安装之前为 23.05 构建的 `.ipk`。
 客户端直接编译本仓库的 `zzz-client-source/src` 和 `include`，不会下载上游 HEAD 替代本地代码。
 如果路由器的 OpenWrt 版本不同，请使用匹配版本的 SDK 重新编译。
 
@@ -83,7 +85,7 @@ python3 tests/run_regression.py
 ```yaml
 - name: Setup OpenWrt SDK
   run: |
-    wget https://downloads.openwrt.org/releases/[版本]/targets/[架构]/[子架构]/openwrt-sdk-[...].tar.xz
+    wget https://downloads.openwrt.org/releases/[版本]/targets/[架构]/[子架构]/openwrt-sdk-[...].tar.zst
 ```
 
 SDK 下载地址可在 [OpenWrt 官方下载页面](https://downloads.openwrt.org/releases/) 查找，找到对应版本和架构的目录，下载文件名包含 `openwrt-sdk` 的压缩包。
@@ -102,8 +104,20 @@ SDK 下载地址可在 [OpenWrt 官方下载页面](https://downloads.openwrt.or
 ### 4. 下载编译产物
 
 编译完成后，在对应的 workflow 运行记录页面底部的 **Artifacts** 中下载
-`zzz-rm2100-openwrt-23.05.2-mipsel_24kc`，其中包含 `.ipk`、构建信息和 SHA256 校验文件。
+`zzz-rm2100-openwrt-25.12.5-mipsel_24kc`，其中包含 `.apk`、构建信息和 SHA256 校验文件。
 安装客户端和 LuCI 插件时需要 `libpcap` 和 `luci-compat` 等依赖。
+
+### LuCI 25.12 兼容说明
+
+现有页面保留 Lua CBI 实现，不要求改写成 JavaScript。
+`luci-compat` 在 25.12 中依赖 `luci-lua-runtime`，后者提供 Lua 5.1、
+`nixio`、Lua UCI 和 ucode/Lua 桥接组件；安装时必须让依赖正常解析。
+插件包含 rpcd ACL：读取 `network` 与 `zzz`，仅允许写入 `zzz`。
+
+交叉编译和模拟回归通过不等于真机认证已验证。升级后请用管理员账号确认：
+页面能打开、WAN 网口下拉正常、保存并应用能写入 `/etc/config.ini`，
+启动/停止按钮有效，日志可显示，以及拔线/恢复后的重连行为。
+如果菜单缓存未更新，可重启 rpcd/uhttpd 并重新登录 LuCI。
 
 ---
 
