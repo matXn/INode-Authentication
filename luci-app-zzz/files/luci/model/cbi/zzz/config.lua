@@ -36,7 +36,8 @@ local function save_config(content)
 	local path, file
 	for attempt = 1, 10 do
 		path = "/etc/config.ini.tmp." .. nixio.getpid() .. "." .. attempt
-		file = nixio.open(path, nixio.open_flags("wronly", "creat", "excl"), 384)
+		-- nixio parses modes as octal digit strings; a decimal 384 is rejected.
+		file = nixio.open(path, nixio.open_flags("wronly", "creat", "excl"), "600")
 		if file then break end
 	end
 	if not file then return nil end
@@ -248,7 +249,7 @@ m.on_after_commit = function(self)
 			if vals.disable_ipv6 == "1" then f:write("disable_ipv6=1\n") end
 		end
 
-		if not fs.chmod("/etc/config/zzz", 384) or
+		if not fs.chmod("/etc/config/zzz", "600") or
 		   not save_config(table.concat(lines)) then
 			self.message = "配置文件保存失败；认证服务未重启，请检查存储空间和文件权限。"
 			return

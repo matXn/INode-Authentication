@@ -4,13 +4,21 @@ local restart_count, fail_write, fail_rename = 0, false, false
 local files = { ["/sys/class/net/wan/type"] = "1\n",
                 ["/sys/class/net/eth0/type"] = "1\n",
                 ["/sys/class/net/lo/type"] = "772\n" }
+-- Mirror nixio's mode parsing: numbers are coerced to strings and read as
+-- octal digits, so 384 (decimal for 0600) is rejected on a real router.
+local function check_mode(mode)
+    local s = tostring(mode)
+    assert(s:match("^[0-7]?[0-7][0-7][0-7]$") or s:match("^[-r][-w][-xsS][-r][-w][-xsS][-r][-w][-xtT]$"),
+           "bad nixio mode: " .. s)
+    return s
+end
 local fs = {}
 function fs.readfile(path) return files[path] end
 function fs.dir()
     local names, index = { "lo", "eth0", "wan" }, 0
     return function() index = index + 1; return names[index] end
 end
-function fs.chmod(path, mode) permissions[path] = mode; return true end
+function fs.chmod(path, mode) permissions[path] = check_mode(mode); return true end
 function fs.rename(src, dst)
     if fail_rename then return nil end
     files[dst], files[src] = files[src], nil
@@ -25,8 +33,8 @@ package.preload["nixio"] = function()
         open_flags = function(...) return {...} end,
         open = function(path, flags, mode)
             if files[path] then return nil end
-            assert(flags[3] == "excl" and mode == 384)
-            permissions[path], files[path] = mode, ""
+            assert(flags[3] == "excl")
+            permissions[path], files[path] = check_mode(mode), ""
             return {
                 writeall = function(_, content)
                     if fail_write then return nil end
@@ -82,8 +90,8 @@ assert(options.retry_delay:validate("10") == "10")
 assert(options.max_retries:validate("-2") == nil)
 assert(options.max_retries:validate("-1") == "-1")
 map:on_after_commit()
-assert(restart_count == 1 and permissions["/etc/config.ini"] == 384)
-assert(permissions["/etc/config/zzz"] == 384)
+assert(restart_count == 1 and permissions["/etc/config.ini"] == "600")
+assert(permissions["/etc/config/zzz"] == "600")
 local original = assert(files["/etc/config.ini"])
 local encoded = assert(original:match("password=([^\n]*)"))
 local decoded = encoded:gsub("\\x(%x%x)", function(hex) return string.char(tonumber(hex, 16)) end)
